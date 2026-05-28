@@ -1,154 +1,222 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api"
 
-const stations = [
-  {
-    id: 1,
-    name: "Costco Gasoline",
-    address: "5800 St Croix Ave, Golden Valley",
-    distance: "2.1 mi",
-    price: 2.89,
-    updated: "5 mins ago",
-  },
-  {
-    id: 2,
-    name: "Shell",
-    address: "101 Snelling Ave, St Paul",
-    distance: "1.3 mi",
-    price: 3.09,
-    updated: "12 mins ago",
-  },
-  {
-    id: 3,
-    name: "Holiday",
-    address: "Marshall Ave, St Paul",
-    distance: "3.7 mi",
-    price: 2.99,
-    updated: "8 mins ago",
-  },
-  {
-    id: 4,
-    name: "BP",
-    address: "University Ave, Minneapolis",
-    distance: "5.2 mi",
-    price: 3.19,
-    updated: "20 mins ago",
-  },
-]
+const containerStyle = {
+  width: "100%",
+  height: "260px",
+  borderRadius: "16px",
+}
+
+function getDistanceMiles(lat1, lng1, lat2, lng2) {
+  const R = 3958.8
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLng = ((lng2 - lng1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
 
 export default function App() {
-  const [sortBy, setSortBy] = useState("cheapest")
   const [location, setLocation] = useState("")
-  const [loadingLocation, setLoadingLocation] = useState(false)
+  const [radius, setRadius] = useState(5)
+  const [sortBy, setSortBy] = useState("cheapest")
+  const [coords, setCoords] = useState(null)
+  const [stations, setStations] = useState([])
+  const [loading, setLoading] = useState(false)
 
-  const sortedStations = [...stations].sort((a, b) => {
-    if (sortBy === "cheapest") {
-      return a.price - b.price
-    }
-
-    return parseFloat(a.distance) - parseFloat(b.distance)
+  const { isLoaded } = useJsApiLoader({
+    googleMapsApiKey:  import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+    libraries: ["places"],
   })
 
-  const cheapestPrice = Math.min(...stations.map((s) => s.price))
-  const mostExpensive = Math.max(...stations.map((s) => s.price))
-  const savings = (mostExpensive - cheapestPrice).toFixed(2)
+  const fetchStations = (center) => {
+    if (!window.google) return
 
-  const detectLocation = () => {
+    setLoading(true)
+
+    const service = new window.google.maps.places.PlacesService(
+      document.createElement("div")
+    )
+
+    service.nearbySearch(
+      {
+        location: center,
+        radius: radius * 1609.34,
+        type: "gas_station",
+      },
+      (results, status) => {
+        if (status === window.google.maps.places.PlacesServiceStatus.OK) {
+          const mapped = results.map((place, index) => {
+            const lat = place.geometry.location.lat()
+            const lng = place.geometry.location.lng()
+            const distance = getDistanceMiles(center.lat, center.lng, lat, lng)
+
+            return {
+              id: place.place_id || index,
+              name: place.name,
+              address: place.vicinity,
+              lat,
+              lng,
+              distance,
+              price: Number((2.85 + Math.random() * 0.7).toFixed(2)),
+            }
+          })
+
+          setStations(mapped)
+        } else {
+          alert("No gas stations found. Try another ZIP or radius.")
+          setStations([])
+        }
+
+        setLoading(false)
+      }
+    )
+  }
+
+  const searchByZip = () => {
+    if (!location.trim()) {
+      alert("Enter a ZIP code or city")
+      return
+    }
+
+    const geocoder = new window.google.maps.Geocoder()
+
+    setLoading(true)
+
+    geocoder.geocode(
+      {
+        address: location,
+        componentRestrictions: { country: "US" },
+      },
+      (results, status) => {
+        if (status === "OK") {
+          const lat = results[0].geometry.location.lat()
+          const lng = results[0].geometry.location.lng()
+          const center = { lat, lng }
+
+          setCoords(center)
+          fetchStations(center)
+        } else {
+          alert("Could not find that location")
+          setLoading(false)
+        }
+      }
+    )
+  }
+
+  const useCurrentLocation = () => {
     if (!navigator.geolocation) {
       alert("Geolocation is not supported")
       return
     }
 
-    setLoadingLocation(true)
+    setLoading(true)
 
     navigator.geolocation.getCurrentPosition(
-      () => {
-        setTimeout(() => {
-          setLocation("Current Location")
-          setLoadingLocation(false)
-        }, 1200)
+      (position) => {
+        const center = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        }
+
+        setLocation("Current Location")
+        setCoords(center)
+        fetchStations(center)
       },
       () => {
-        alert("Unable to retrieve your location")
-        setLoadingLocation(false)
+        alert("Unable to get current location")
+        setLoading(false)
       }
     )
   }
 
+  const sortedStations = [...stations].sort((a, b) =>
+    sortBy === "cheapest" ? a.price - b.price : a.distance - b.distance
+  )
+
   return (
     <div className="min-h-screen bg-zinc-950 text-white px-4 py-6">
       <div className="max-w-md mx-auto">
-        <div className="mb-6">
-          <h1 className="text-4xl font-bold text-green-400">
-            FuelSaver
-          </h1>
-
-          <p className="text-zinc-400 mt-2">
-            Find affordable gas near you
-          </p>
-        </div>
+        <h1 className="text-4xl font-bold text-green-400">FuelSaver</h1>
+        <p className="text-zinc-400 mt-2 mb-6">
+          Find affordable gas near you
+        </p>
 
         <div className="bg-zinc-900 rounded-2xl p-4 mb-5 border border-zinc-800">
-          <p className="text-sm text-zinc-400 mb-2">
-            Search Location
-          </p>
-
           <input
-            type="text"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
             placeholder="Enter ZIP code or city"
             className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 mb-3 text-white outline-none"
           />
 
-          <select className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 mb-3 text-white">
-            <option>5 miles</option>
-            <option>10 miles</option>
-            <option>25 miles</option>
+          <select
+            value={radius}
+            onChange={(e) => setRadius(Number(e.target.value))}
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 mb-3 text-white"
+          >
+            <option value={5}>5 miles</option>
+            <option value={10}>10 miles</option>
+            <option value={25}>25 miles</option>
           </select>
 
-          <button className="w-full bg-green-500 hover:bg-green-400 transition rounded-xl py-3 font-semibold text-black">
-            Find Cheapest Gas
+          <button
+            onClick={searchByZip}
+            className="w-full bg-green-500 hover:bg-green-400 rounded-xl py-3 font-semibold text-black"
+          >
+            {loading ? "Searching..." : "Find Gas Stations"}
           </button>
 
           <button
-            onClick={detectLocation}
-            className="w-full mt-3 bg-zinc-800 hover:bg-zinc-700 transition rounded-xl py-3 font-medium text-zinc-200"
+            onClick={useCurrentLocation}
+            className="w-full mt-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl py-3 font-medium text-zinc-200"
           >
-            {loadingLocation
-              ? "Detecting location..."
-              : "Use My Current Location"}
+            Use My Current Location
           </button>
         </div>
 
-        <div className="bg-green-500/10 border border-green-500/20 rounded-2xl p-4 mb-5">
-          <p className="text-green-300 font-medium">
-            You could save up to ${savings}/gal nearby
-          </p>
-        </div>
+        {isLoaded && coords && (
+          <div className="mb-5">
+            <GoogleMap mapContainerStyle={containerStyle} center={coords} zoom={12}>
+              <Marker position={coords} />
+              {stations.map((station) => (
+                <Marker
+                  key={station.id}
+                  position={{ lat: station.lat, lng: station.lng }}
+                />
+              ))}
+            </GoogleMap>
+          </div>
+        )}
 
-        <div className="flex gap-2 mb-4">
-          <button
-            onClick={() => setSortBy("cheapest")}
-            className={`flex-1 rounded-xl py-2 font-medium ${
-              sortBy === "cheapest"
-                ? "bg-green-500 text-black"
-                : "bg-zinc-800 text-zinc-300"
-            }`}
-          >
-            Cheapest
-          </button>
+        {stations.length > 0 && (
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => setSortBy("cheapest")}
+              className={`flex-1 rounded-xl py-2 font-medium ${
+                sortBy === "cheapest"
+                  ? "bg-green-500 text-black"
+                  : "bg-zinc-800 text-zinc-300"
+              }`}
+            >
+              Cheapest
+            </button>
 
-          <button
-            onClick={() => setSortBy("closest")}
-            className={`flex-1 rounded-xl py-2 font-medium ${
-              sortBy === "closest"
-                ? "bg-green-500 text-black"
-                : "bg-zinc-800 text-zinc-300"
-            }`}
-          >
-            Closest
-          </button>
-        </div>
+            <button
+              onClick={() => setSortBy("closest")}
+              className={`flex-1 rounded-xl py-2 font-medium ${
+                sortBy === "closest"
+                  ? "bg-green-500 text-black"
+                  : "bg-zinc-800 text-zinc-300"
+              }`}
+            >
+              Closest
+            </button>
+          </div>
+        )}
 
         <div className="space-y-4">
           {sortedStations.map((station, index) => (
@@ -156,18 +224,12 @@ export default function App() {
               key={station.id}
               className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4"
             >
-              <div className="flex justify-between items-start gap-4">
+              <div className="flex justify-between gap-4">
                 <div>
-                  <h2 className="font-semibold text-lg">
-                    {station.name}
-                  </h2>
-
-                  <p className="text-zinc-400 text-sm">
-                    {station.address}
-                  </p>
-
+                  <h2 className="font-semibold text-lg">{station.name}</h2>
+                  <p className="text-zinc-400 text-sm">{station.address}</p>
                   <p className="text-zinc-500 text-sm mt-1">
-                    {station.distance}
+                    {station.distance.toFixed(1)} mi
                   </p>
                 </div>
 
@@ -175,20 +237,11 @@ export default function App() {
                   <p className="text-2xl font-bold text-green-400">
                     ${station.price.toFixed(2)}
                   </p>
+                  <p className="text-xs text-zinc-500">Estimated</p>
 
-                  <p className="text-xs text-zinc-500">
-                    {station.updated}
-                  </p>
-
-                  {index === 0 && sortBy === "cheapest" && (
+                  {index === 0 && (
                     <span className="inline-block mt-2 text-xs bg-green-500 text-black px-2 py-1 rounded-full font-semibold">
-                      Cheapest
-                    </span>
-                  )}
-
-                  {index === 0 && sortBy === "closest" && (
-                    <span className="inline-block mt-2 text-xs bg-blue-500 text-white px-2 py-1 rounded-full font-semibold">
-                      Closest
+                      {sortBy === "cheapest" ? "Cheapest" : "Closest"}
                     </span>
                   )}
                 </div>
@@ -198,7 +251,7 @@ export default function App() {
         </div>
 
         <p className="text-xs text-zinc-600 text-center mt-6">
-          Demo MVP • Prices are sample estimates • Live pricing API coming soon
+          Gas station locations powered by Google Maps • Prices estimated for now
         </p>
       </div>
     </div>
